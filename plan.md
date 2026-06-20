@@ -654,7 +654,33 @@ DeviceMotion event (60fps raw)
 | `controller-data` | Controller → Server → Desktop | Smoothed sensor telemetry (30Hz) for katana visual |
 | `controller-gesture` | Controller → Server → Desktop | **Authoritative classified gesture** |
 | `game-event` | Desktop → Server → Controller | Trigger vibration / haptic feedback |
-| `game-feedback` | Server → Controller | Visual flash + `navigator.vibrate()` |
 | `host-disconnected` | Server → Controller | Game host left |
 | `controller-disconnected` | Server → Desktop | Controller left |
+
+## Code Quality & Modular Refactoring (v3)
+
+### Goal
+The monolithic `App.tsx` files in both `game` and `controller` grew large and complex. To improve scalability, maintainability, and compilation speed, they were refactored into modular components, utilities, and managers.
+
+### Controller Refactoring
+We extracted the following modules and components from `/controller/src/App.tsx`:
+- [types.ts](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/controller/src/types.ts): Holds type definitions for `Vec3`, `Rotation`, `SensorData`, `GestureType`, and `FeedbackFlash`.
+- [constants.ts](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/controller/src/constants.ts): Centralizes sensor parameters, thresholds, and `GESTURE_META` mapping.
+- [utils/math.ts](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/controller/src/utils/math.ts): Holds math utilities including low-pass filter calculations.
+- [components/Lobby.tsx](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/controller/src/components/Lobby.tsx): UI component for roomId inputs and backend connection handling.
+- [components/SwordVisualizer.tsx](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/controller/src/components/SwordVisualizer.tsx): Renders the 3D-effect CSS-styled Katana.
+- [components/GameplayHUD.tsx](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/controller/src/components/GameplayHUD.tsx): Renders active gesture banners, telemetry stats, and combat technique guides.
+- [App.tsx](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/controller/src/App.tsx): Act as a clean state orchestrator managing web services and gesture classified polling loop.
+
+### Game Refactoring
+We extracted the following modules and components from `/game/src/App.tsx`:
+- [types.ts](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/game/src/types.ts): Defines types for `SensorData`, `Enemy`, and `Particle`.
+- [audio/SoundManager.ts](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/game/src/audio/SoundManager.ts): Singleton class abstracting audio context creation, low frequency background drone LFO, and custom synthesizer sound effect triggers.
+- [components/Lobby.tsx](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/game/src/components/Lobby.tsx): Portal configurations, server state status, and paired sword QR display.
+- [components/GameOver.tsx](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/game/src/components/GameOver.tsx): The scoreboard and session controls.
+- [components/GameHUD.tsx](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/game/src/components/GameHUD.tsx): High-frequency telemetry inspector overlay and health/combos panel.
+- [App.tsx](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/game/src/App.tsx): Core hosting orchestrator and isometric canvas rendering frame update tick loop.
+
+Both applications build cleanly under TypeScript verbatim module compliance.
+
 

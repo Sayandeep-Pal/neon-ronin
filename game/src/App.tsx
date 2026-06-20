@@ -1,49 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { Swords, Activity, Smartphone, Volume2, VolumeX } from 'lucide-react';
+import { Volume2, VolumeX } from 'lucide-react';
 import QRCode from 'qrcode';
-
-// Interface for sensor data
-interface SensorData {
-  accel: { x: number; y: number; z: number };
-  rotation: { alpha: number; beta: number; gamma: number };
-  gyro: { alpha: number; beta: number; gamma: number };
-  timestamp: number;
-}
-
-// Game enemy definition
-interface Enemy {
-  id: string;
-  type: 'drone' | 'shieldbot' | 'cyberninja' | 'kamikaze' | 'samurai';
-  x: number; // Ground coordinates (-150 to 150)
-  y: number;
-  z: number; // Elevation
-  speed: number;
-  health: number;
-  maxHealth: number;
-  weakness: 'horizontal' | 'vertical' | 'diagonal' | 'thrust' | 'counter';
-  angle: number; // Spawn angle (0 to 2*PI)
-  size: number;
-  color: string;
-  pulseTimer: number;
-  state: 'approach' | 'windup' | 'slashed' | 'dead';
-  windupTime: number; // Max time in windup before hit
-  windupCounter: number;
-}
-
-// Particle system definition
-interface Particle {
-  x: number;
-  y: number;
-  z: number;
-  vx: number;
-  vy: number;
-  vz: number;
-  color: string;
-  life: number;
-  maxLife: number;
-  size: number;
-}
+import { soundManager } from './audio/SoundManager';
+import { Lobby } from './components/Lobby';
+import { GameOver } from './components/GameOver';
+import { GameHUD } from './components/GameHUD';
+import type { SensorData, Enemy, Particle } from './types';
 
 export default function App() {
   // Connection states
@@ -77,10 +40,8 @@ export default function App() {
     timestamp: 0
   });
 
-  // Canvas & Audio refs
+  // Canvas refs
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const synthIntervalRef = useRef<any>(null); // For background synth drone
 
   // Gameplay mechanics refs
   const enemiesRef = useRef<Enemy[]>([]);
@@ -94,7 +55,6 @@ export default function App() {
   const nextWaveTimer = useRef<number>(0);
   const screenShakeRef = useRef<number>(0);
   const flashBackgroundRef = useRef<string | null>(null);
-
 
   // Set default socket server and controller client domains
   useEffect(() => {
@@ -111,168 +71,6 @@ export default function App() {
         : window.location.origin
     ));
   }, []);
-
-  // Web Audio Synth setup for sound effects (zero network assets)
-  const initAudio = () => {
-    if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-      startSynthDrone();
-    }
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
-  };
-
-  // Neon Synthwave low-frequency background drone
-  const startSynthDrone = () => {
-    if (isMuted || !audioContextRef.current) return;
-    try {
-      const ctx = audioContextRef.current;
-      const osc1 = ctx.createOscillator();
-      const osc2 = ctx.createOscillator();
-      const gain = ctx.createGain();
-      const filter = ctx.createBiquadFilter();
-
-      osc1.type = 'sawtooth';
-      osc2.type = 'square';
-      osc1.frequency.setValueAtTime(55, ctx.currentTime); // A1 note
-      osc2.frequency.setValueAtTime(55.5, ctx.currentTime); // detune slightly
-
-      filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(120, ctx.currentTime);
-
-      gain.gain.setValueAtTime(0.12, ctx.currentTime);
-
-      osc1.connect(filter);
-      osc2.connect(filter);
-      filter.connect(gain);
-      gain.connect(ctx.destination);
-
-      osc1.start();
-      osc2.start();
-
-      // Moderate pitch sweep LFO
-      synthIntervalRef.current = setInterval(() => {
-        if (ctx.state === 'running') {
-          const cut = 100 + Math.sin(Date.now() / 2000) * 40;
-          filter.frequency.setValueAtTime(cut, ctx.currentTime);
-        }
-      }, 50);
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  // Synthesize custom sound effects
-  const playSound = (type: 'swing' | 'hit' | 'perfect' | 'damage' | 'alarm' | 'boss_charge') => {
-    if (isMuted || !audioContextRef.current) return;
-    try {
-      const ctx = audioContextRef.current;
-      const now = ctx.currentTime;
-
-      if (type === 'swing') {
-        // Bandpass noise sweep for katana swing
-        const bufferSize = ctx.sampleRate * 0.15; // 150ms
-        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-        const data = buffer.getChannelData(0);
-        for (let i = 0; i < bufferSize; i++) {
-          data[i] = Math.random() * 2 - 1;
-        }
-        const noise = ctx.createBufferSource();
-        noise.buffer = buffer;
-
-        const filter = ctx.createBiquadFilter();
-        filter.type = 'bandpass';
-        filter.Q.setValueAtTime(8, now);
-        filter.frequency.setValueAtTime(800, now);
-        filter.frequency.exponentialRampToValueAtTime(150, now + 0.15);
-
-        const gain = ctx.createGain();
-        gain.gain.setValueAtTime(0.25, now);
-        gain.gain.linearRampToValueAtTime(0.01, now + 0.15);
-
-        noise.connect(filter);
-        filter.connect(gain);
-        gain.connect(ctx.destination);
-        noise.start();
-      } 
-      else if (type === 'hit') {
-        // High impact laser blast with rapid pitch envelope
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(600, now);
-        osc.frequency.exponentialRampToValueAtTime(80, now + 0.2);
-
-        gain.gain.setValueAtTime(0.4, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
-
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(now + 0.2);
-      } 
-      else if (type === 'perfect') {
-        // Synthesizer metallic high clash + chord (Perfect rating!)
-        const osc1 = ctx.createOscillator();
-        const osc2 = ctx.createOscillator();
-        const gain = ctx.createGain();
-
-        osc1.type = 'sine';
-        osc2.type = 'sawtooth';
-        
-        osc1.frequency.setValueAtTime(880, now); // A5
-        osc2.frequency.setValueAtTime(1320, now); // E6
-
-        gain.gain.setValueAtTime(0.5, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
-
-        osc1.connect(gain);
-        osc2.connect(gain);
-        gain.connect(ctx.destination);
-
-        osc1.start(); osc2.start();
-        osc1.stop(now + 0.4); osc2.stop(now + 0.4);
-      } 
-      else if (type === 'damage') {
-        // Low distorted explosion growl
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(140, now);
-        osc.frequency.linearRampToValueAtTime(30, now + 0.4);
-
-        gain.gain.setValueAtTime(0.6, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
-
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(now + 0.4);
-      } 
-      else if (type === 'alarm') {
-        // Pitch sweep warning siren
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(350, now);
-        osc.frequency.linearRampToValueAtTime(700, now + 0.25);
-
-        gain.gain.setValueAtTime(0.2, now);
-        gain.gain.linearRampToValueAtTime(0.01, now + 0.25);
-
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(now + 0.25);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
 
   // Trigger hosting room connection
   const hostGameSession = () => {
@@ -312,7 +110,7 @@ export default function App() {
     socket.on('controller-joined', (data: any) => {
       console.log(`Mobile controller paired successfully! (Socket: ${data.socketId})`);
       setIsControllerConnected(true);
-      initAudio();
+      soundManager.initAudio();
     });
 
     socket.on('controller-disconnected', () => {
@@ -356,7 +154,7 @@ export default function App() {
 
   // Perform swing slash attack action in game
   const executeSlash = (gestureType: 'horizontal' | 'vertical' | 'diagonal' | 'thrust', intensity: number) => {
-    playSound('swing');
+    soundManager.playSound('swing');
     setDetectedGesture(gestureType.toUpperCase());
 
     // Show temporary banner
@@ -431,12 +229,12 @@ export default function App() {
 
     if (hitAny) {
       if (perfectHit) {
-        playSound('perfect');
+        soundManager.playSound('perfect');
         flashBackgroundRef.current = 'rgba(255, 255, 255, 0.15)';
         // Send haptic feedback trigger to mobile: 150ms vibration
         if (socketRef.current) socketRef.current.emit('game-event', { type: 'perfect', duration: 150 });
       } else {
-        playSound('hit');
+        soundManager.playSound('hit');
         // Send haptic feedback trigger to mobile: 50ms vibration
         if (socketRef.current) socketRef.current.emit('game-event', { type: 'hit', duration: 50 });
       }
@@ -553,7 +351,7 @@ export default function App() {
   };
 
   const triggerWaveSpawns = (waveNum: number) => {
-    playSound('alarm');
+    soundManager.playSound('alarm');
     flashBackgroundRef.current = 'rgba(0, 240, 255, 0.08)';
 
     // Enemy spawn queues
@@ -855,7 +653,7 @@ export default function App() {
             if (dist < 22) {
               enemy.state = 'windup';
               enemy.windupCounter = 0;
-              playSound('alarm');
+              soundManager.playSound('alarm');
             } else {
               // Move towards center (0,0)
               enemy.x -= Math.cos(enemy.angle) * enemy.speed;
@@ -868,7 +666,7 @@ export default function App() {
               // Attack completed successfully - damage player
               if (blockActiveRef.current) {
                 // Attack blocked!
-                playSound('hit');
+                soundManager.playSound('hit');
                 createExplosion(enemy.x, enemy.y, enemy.z, '#b026ff', 8);
                 // Send minor block vibrate feedback to phone: 40ms
                 if (socketRef.current) socketRef.current.emit('game-event', { type: 'hit', duration: 40 });
@@ -1040,7 +838,7 @@ export default function App() {
 
   // Handle player damage events
   const takeDamage = (damage: number) => {
-    playSound('damage');
+    soundManager.playSound('damage');
     screenShakeRef.current = 15;
     flashBackgroundRef.current = 'rgba(255, 0, 127, 0.25)';
 
@@ -1072,7 +870,7 @@ export default function App() {
   };
 
   const startPlaying = () => {
-    initAudio();
+    soundManager.initAudio();
     setGameState('playing');
     scoreRef.current = 0;
     comboRef.current = 0;
@@ -1095,20 +893,15 @@ export default function App() {
 
   // Toggle Mute settings
   const toggleMute = () => {
-    setIsMuted(!isMuted);
-    if (!isMuted) {
-      if (synthIntervalRef.current) clearInterval(synthIntervalRef.current);
-    } else {
-      if (audioContextRef.current) {
-        startSynthDrone();
-      }
-    }
+    const nextMuted = !isMuted;
+    setIsMuted(nextMuted);
+    soundManager.setMuted(nextMuted);
   };
 
   // Clean up timers on unmount
   useEffect(() => {
     return () => {
-      if (synthIntervalRef.current) clearInterval(synthIntervalRef.current);
+      soundManager.cleanup();
     };
   }, []);
 
@@ -1139,199 +932,41 @@ export default function App() {
 
       {/* LOBBY / SETUP SCREEN */}
       {gameState === 'lobby' && (
-        <div className="lobby-screen">
-          <h1 className="lobby-title">Neon Ronin</h1>
-          <h2 className="lobby-subtitle">Cyber-Katana Motion Slasher</h2>
-
-          <div className="lobby-panels">
-            {/* Host Server configurations */}
-            <div className="lobby-panel">
-              <div className="subtitle" style={{ fontSize: '0.8rem', marginBottom: '20px' }}>Step 1: Configure Port Link</div>
-              
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', width: '100%' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label className="subtitle" style={{ fontSize: '0.7rem', alignSelf: 'flex-start' }}>Backend Server URL</label>
-                  <input
-                    type="text"
-                    style={{
-                      background: 'rgba(0,0,0,0.5)',
-                      border: '1px solid var(--text-secondary)',
-                      borderRadius: '4px',
-                      color: '#fff',
-                      padding: '10px',
-                      fontSize: '0.9rem',
-                      fontFamily: 'var(--font-display)',
-                      outline: 'none'
-                    }}
-                    value={backendUrl}
-                    onChange={(e) => setBackendUrl(e.target.value)}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label className="subtitle" style={{ fontSize: '0.7rem', alignSelf: 'flex-start' }}>Controller client url base</label>
-                  <input
-                    type="text"
-                    style={{
-                      background: 'rgba(0,0,0,0.5)',
-                      border: '1px solid var(--text-secondary)',
-                      borderRadius: '4px',
-                      color: '#fff',
-                      padding: '10px',
-                      fontSize: '0.9rem',
-                      fontFamily: 'var(--font-display)',
-                      outline: 'none'
-                    }}
-                    value={controllerUrlBase}
-                    onChange={(e) => setControllerUrlBase(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              {!roomId ? (
-                <button className="cyber-btn" style={{ width: '100%', marginTop: '30px' }} onClick={hostGameSession} disabled={isSearchingHost}>
-                  {isSearchingHost ? 'Pairing...' : 'Open Dojo Portal'}
-                </button>
-              ) : (
-                <div style={{ width: '100%', textAlign: 'center', marginTop: '20px' }}>
-                  <span className="subtitle" style={{ fontSize: '0.65rem' }}>Dojo Portal Open</span>
-                  <div className="room-display">{roomId}</div>
-                </div>
-              )}
-            </div>
-
-            {/* QR Connection client pairing */}
-            <div className={`lobby-panel paired ${isControllerConnected ? 'paired' : ''}`}>
-              <div className="subtitle" style={{ fontSize: '0.8rem', marginBottom: '20px' }}>Step 2: Sync Cyber Katana</div>
-
-              {qrCodeUrl && !isControllerConnected ? (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px' }}>
-                  <div className="qr-placeholder">
-                    <img src={qrCodeUrl} alt="Scan to connect controller" style={{ width: '200px', height: '200px' }} />
-                  </div>
-                  <span className="subtitle" style={{ fontSize: '0.65rem', textAlign: 'center' }}>
-                    Scan with smartphone QR scanner or navigate to the controller URL to connect.
-                  </span>
-                </div>
-              ) : isControllerConnected ? (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexGrow: 1, gap: '20px' }}>
-                  <Swords size={60} color="var(--neon-pink)" style={{ animation: 'sword-glow 1.5s infinite alternate' }} />
-                  <span className="subtitle" style={{ color: 'var(--neon-pink)', letterSpacing: '4px', fontWeight: 'bold' }}>
-                    KATANA SYNCED & ARMED
-                  </span>
-                  
-                  <button className="cyber-btn pink" style={{ marginTop: '20px', padding: '16px 50px' }} onClick={startPlaying}>
-                    Enter Dojo
-                  </button>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexGrow: 1, color: 'var(--text-secondary)' }}>
-                  <Smartphone size={40} style={{ marginBottom: '10px' }} />
-                  <span style={{ fontSize: '0.8rem', letterSpacing: '1px' }}>Awaiting Dojo Portal initiation...</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <Lobby
+          roomId={roomId}
+          backendUrl={backendUrl}
+          setBackendUrl={setBackendUrl}
+          controllerUrlBase={controllerUrlBase}
+          setControllerUrlBase={setControllerUrlBase}
+          isSearchingHost={isSearchingHost}
+          isControllerConnected={isControllerConnected}
+          qrCodeUrl={qrCodeUrl}
+          hostGameSession={hostGameSession}
+          startPlaying={startPlaying}
+        />
       )}
 
       {/* GAME OVER SCREEN */}
       {gameState === 'gameover' && (
-        <div className="game-over-screen">
-          <h1 className="game-over-title">Dojo Fallen</h1>
-          <div style={{ display: 'flex', gap: '30px', margin: '20px 0' }}>
-            <div style={{ textAlign: 'center' }}>
-              <div className="subtitle" style={{ fontSize: '0.75rem' }}>Final Score</div>
-              <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: 'var(--neon-blue)', fontFamily: 'var(--font-display)' }}>{score}</div>
-            </div>
-            <div style={{ textAlign: 'center' }}>
-              <div className="subtitle" style={{ fontSize: '0.75rem' }}>Highest Combo</div>
-              <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: 'var(--neon-pink)', fontFamily: 'var(--font-display)' }}>{maxCombo}</div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: '20px' }}>
-            <button className="cyber-btn pink" onClick={startPlaying}>
-              Re-enter Dojo
-            </button>
-            <button className="cyber-btn" onClick={exitToLobby}>
-              Dojo Lobby
-            </button>
-          </div>
-        </div>
+        <GameOver
+          score={score}
+          maxCombo={maxCombo}
+          startPlaying={startPlaying}
+          exitToLobby={exitToLobby}
+        />
       )}
 
       {/* GAMEPLAY OVERLAY HUD */}
       {gameState === 'playing' && (
-        <>
-          {/* Main game HUD: HP, Score, Wave */}
-          <div className="game-hud">
-            <div className="hud-group">
-              <div className="hud-item">
-                <div className="hud-label">Ronin Health</div>
-                <div className="hud-health-bar">
-                  <div className="hud-health-fill" style={{ width: `${health}%` }} />
-                </div>
-              </div>
-            </div>
-
-            <div className="hud-group" style={{ alignItems: 'center' }}>
-              {combo >= 3 && (
-                <div className="combo-badge">
-                  {combo}X COMBO
-                </div>
-              )}
-            </div>
-
-            <div className="hud-group" style={{ flexDirection: 'row', gap: '12px' }}>
-              <div className="hud-item" style={{ minWidth: '120px' }}>
-                <div className="hud-label">Score</div>
-                <div className="hud-value" style={{ color: 'var(--neon-blue)' }}>{score}</div>
-              </div>
-              <div className="hud-item" style={{ minWidth: '100px' }}>
-                <div className="hud-label">Wave</div>
-                <div className="hud-value" style={{ color: 'var(--neon-pink)' }}>{wave}</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Gesture classifier text indicator banner */}
-          <div id="gesture-banner" className="gesture-banner">
-            {detectedGesture}
-          </div>
-
-          {/* Live Developer Telemetry Dashboard */}
-          <div className="telemetry-overlay">
-            <div className="telemetry-header">
-              <span>Sensor Dashboard</span>
-              <Activity size={12} style={{ animation: 'grid-glow 1s infinite' }} />
-            </div>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.8rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Status:</span>
-                <span style={{ color: '#33ff33', fontWeight: 'bold' }}>Katana Linked</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Yaw / Pitch / Roll:</span>
-                <span style={{ fontFamily: 'var(--font-display)' }}>
-                  {latestSensor.current.rotation.alpha}° / {latestSensor.current.rotation.beta}° / {latestSensor.current.rotation.gamma}°
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Linear Acceleration:</span>
-                <span style={{ fontFamily: 'var(--font-display)' }}>
-                  {latestSensor.current.accel.x} / {latestSensor.current.accel.y} / {latestSensor.current.accel.z}
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Guard Stance:</span>
-                <span style={{ color: blockActiveRef.current ? 'var(--neon-purple)' : 'var(--text-secondary)', fontWeight: 'bold' }}>
-                  {blockActiveRef.current ? 'BLOCK ACTIVE' : 'UNGUARDED'}
-                </span>
-              </div>
-            </div>
-          </div>
-        </>
+        <GameHUD
+          health={health}
+          combo={combo}
+          score={score}
+          wave={wave}
+          detectedGesture={detectedGesture}
+          latestSensor={latestSensor}
+          blockActive={blockActiveRef.current}
+        />
       )}
 
       {/* Main Game Screen Canvas */}

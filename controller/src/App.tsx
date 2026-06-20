@@ -1,50 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { Wifi } from 'lucide-react';
+import { Lobby } from './components/Lobby';
+import { GameplayHUD } from './components/GameplayHUD';
+import type { SensorData, GestureType, FeedbackFlash, Rotation } from './types';
+import { lpf } from './utils/math';
+import {
+  SLASH_THRESHOLD,
+  GESTURE_COOLDOWN_MS,
+  BLOCK_MOTION_THRESHOLD,
+  BLOCK_BETA_MIN,
+  BLOCK_BETA_MAX,
+  BLOCK_GAMMA_MAX
+} from './constants';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-interface Vec3 { x: number; y: number; z: number; }
-interface Rotation { alpha: number; beta: number; gamma: number; }
-
-interface SensorData {
-  accel: Vec3;
-  rotation: Rotation;
-  gyro: Rotation;
-}
-
-type GestureType = 'HORIZONTAL' | 'VERTICAL' | 'DIAGONAL' | 'THRUST' | 'BLOCK' | 'IDLE';
-type FeedbackFlash = 'hit' | 'perfect' | 'damage' | '';
-
-// ─── Low-pass filter ──────────────────────────────────────────────────────────
-// Smooths raw sensor noise. alpha=0.15 → heavy smoothing, alpha=0.5 → light
-const LP_ALPHA = 0.18; // tuned for motion-controller feel
-function lpf(prev: number, next: number, alpha = LP_ALPHA): number {
-  return prev + alpha * (next - prev);
-}
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-// Minimum acceleration peak (m/s²) to register a slash
-const SLASH_THRESHOLD = 14;
-// Minimum cooldown between gestures (ms) — prevents double-firing
-const GESTURE_COOLDOWN_MS = 350;
-// If total acceleration falls below this while upright, we're in BLOCK stance
-const BLOCK_MOTION_THRESHOLD = 2.5;
-// Upright stance: phone held vertically (beta ~ 60°–110°) and roll (gamma) small
-const BLOCK_BETA_MIN = 55;
-const BLOCK_BETA_MAX = 115;
-const BLOCK_GAMMA_MAX = 28;
-
-// ─── Gesture Config (label, icon label, color) ────────────────────────────────
-const GESTURE_META: Record<GestureType, { label: string; color: string; hint: string }> = {
-  HORIZONTAL: { label: '← HORIZONTAL →', color: '#00f0ff', hint: 'vs Drones'       },
-  VERTICAL:   { label: '↓ VERTICAL ↓',   color: '#b026ff', hint: 'vs Shield Bots'  },
-  DIAGONAL:   { label: '↘ DIAGONAL ↖',   color: '#ff007f', hint: 'vs Cyber Ninjas' },
-  THRUST:     { label: '▶ THRUST',        color: '#ffaa00', hint: 'vs Kamikazes'    },
-  BLOCK:      { label: '⛊  BLOCKING',     color: '#7df9ff', hint: 'Guard Active'    },
-  IDLE:       { label: '',                color: 'transparent', hint: ''           },
-};
-
-// ─── Component ────────────────────────────────────────────────────────────────
 export default function App() {
   // Connection
   const [roomId,       setRoomId]       = useState('');
@@ -365,15 +333,6 @@ export default function App() {
   // Clean up socket
   useEffect(() => () => { socketRef.current?.disconnect(); }, []);
 
-  // Sword CSS 3D transform (uses smoothed rotation, clamped to sane ranges)
-  const clampedBeta  = Math.min(Math.max(hudRot.beta,  -90), 90);
-  const clampedGamma = Math.min(Math.max(hudRot.gamma, -75), 75);
-  const swordStyle   = {
-    transform: `rotateX(${-clampedBeta}deg) rotateY(${clampedGamma}deg)`,
-  };
-
-  const meta = GESTURE_META[gesture];
-
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="controller-container">
@@ -388,134 +347,28 @@ export default function App() {
 
       {/* ── Lobby Panel ── */}
       {!isJoined ? (
-        <div className="connection-panel">
-          <div className="status-badge">
-            <div className={`status-dot ${isConnected ? 'connected' : isConnecting ? 'connecting' : ''}`} />
-            {isConnected ? 'Server Connected' : isConnecting ? 'Connecting…' : 'Disconnected'}
-          </div>
-
-          <div className="room-input-container">
-            <label className="subtitle" style={{ alignSelf: 'flex-start', fontSize: '0.75rem' }}>Room ID</label>
-            <input
-              type="text"
-              className="room-input"
-              placeholder="CYBER7"
-              value={roomId}
-              onChange={(e) => setRoomId(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
-              maxLength={6}
-            />
-          </div>
-
-          <div className="room-input-container">
-            <label className="subtitle" style={{ alignSelf: 'flex-start', fontSize: '0.75rem' }}>Backend Socket URL</label>
-            <input
-              type="text"
-              className="room-input"
-              style={{ fontSize: '0.9rem', letterSpacing: '0.5px' }}
-              placeholder="http://host:3001"
-              value={backendUrl}
-              onChange={(e) => setBackendUrl(e.target.value.trim())}
-            />
-          </div>
-
-          {errorMsg && (
-            <div style={{ color: '#ff3355', fontSize: '0.85rem', textAlign: 'center' }}>
-              {errorMsg}
-            </div>
-          )}
-
-          <button className="neon-btn" onClick={handleConnect} disabled={isConnecting}
-            style={{ width: '100%', marginTop: '12px', opacity: isConnecting ? 0.6 : 1 }}>
-            {isConnecting ? 'Linking…' : 'Initialize Link'}
-          </button>
-        </div>
-
+        <Lobby
+          roomId={roomId}
+          setRoomId={setRoomId}
+          backendUrl={backendUrl}
+          setBackendUrl={setBackendUrl}
+          isConnected={isConnected}
+          isConnecting={isConnecting}
+          errorMsg={errorMsg}
+          handleConnect={handleConnect}
+        />
       ) : (
         /* ── Gameplay HUD ── */
-        <>
-          {/* Status bar */}
-          <div className="hud-panel" style={{ flexDirection: 'row', justifyContent: 'space-between', padding: '10px 16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Wifi size={16} color="var(--neon-blue)" />
-              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--neon-blue)' }}>
-                ROOM: {roomId}
-              </span>
-            </div>
-            <button
-              onClick={calibrateController}
-              className={`neon-btn neon-btn-pink ${calibrated ? 'calibrated' : ''}`}
-              style={{ padding: '7px 14px', fontSize: '0.72rem', animation: 'none', border: '1px solid var(--neon-pink)' }}
-            >
-              {calibrated ? '✓ Re-Calibrate' : 'Calibrate'}
-            </button>
-          </div>
-
-          {/* Gesture feedback banner */}
-          <div className={`gesture-display ${gesture !== 'IDLE' ? 'active' : ''}`}
-            style={{ borderColor: meta.color, boxShadow: `0 0 20px ${meta.color}44` }}>
-            {gesture !== 'IDLE' ? (
-              <>
-                <div className="gesture-label" style={{ color: meta.color }}>{meta.label}</div>
-                <div className="gesture-hint">{meta.hint}</div>
-              </>
-            ) : (
-              <div className="gesture-idle">
-                {calibrated ? 'READY · SWING TO SLASH' : '← TAP CALIBRATE FIRST →'}
-              </div>
-            )}
-            {/* Cooldown bar */}
-            {inCooldown && (
-              <div className="cooldown-bar">
-                <div className="cooldown-fill" style={{ borderColor: meta.color }} />
-              </div>
-            )}
-          </div>
-
-          {/* 3D Katana Visualizer */}
-          <div className="sword-visualizer">
-            <div className="sword-wrapper" style={swordStyle}>
-              <div className="cyber-katana" />
-              <div className="cyber-katana-tsuba" />
-              <div className="cyber-katana-hilt" />
-            </div>
-          </div>
-
-          {/* Combat cheat-sheet */}
-          <div className="hud-panel move-guide">
-            <div className="subtitle" style={{ fontSize: '0.6rem', marginBottom: '8px' }}>KATANA TECHNIQUES</div>
-            <div className="move-grid">
-              <div className="move-item"><span style={{ color: '#00f0ff' }}>← →</span> Horizontal · Drone</div>
-              <div className="move-item"><span style={{ color: '#b026ff' }}>↑ ↓</span> Vertical · Shield Bot</div>
-              <div className="move-item"><span style={{ color: '#ff007f' }}>↘ ↖</span> Diagonal · Ninja</div>
-              <div className="move-item"><span style={{ color: '#ffaa00' }}>▶  </span> Thrust · Kamikaze</div>
-              <div className="move-item"><span style={{ color: '#7df9ff' }}>⛊  </span> Hold Upright · Block</div>
-            </div>
-          </div>
-
-          {/* Mini telemetry row */}
-          <div className="telemetry-row" style={{ padding: '0 4px' }}>
-            <div className="telemetry-item">
-              <div className="telemetry-label">Pitch β</div>
-              <div className="telemetry-value" style={{ color: 'var(--neon-pink)' }}>{hudRot.beta}°</div>
-            </div>
-            <div className="telemetry-item">
-              <div className="telemetry-label">Roll γ</div>
-              <div className="telemetry-value" style={{ color: 'var(--neon-purple)' }}>{hudRot.gamma}°</div>
-            </div>
-            <div className="telemetry-item">
-              <div className="telemetry-label">|Acc|</div>
-              <div className="telemetry-value">
-                {Math.sqrt(hudAccel.x ** 2 + hudAccel.y ** 2 + hudAccel.z ** 2).toFixed(1)}
-              </div>
-            </div>
-          </div>
-
-          {permissionState === 'denied' && (
-            <div style={{ color: '#ff3355', fontSize: '0.8rem', textAlign: 'center', padding: '8px' }}>
-              Sensors blocked. Enable Motion & Orientation in browser/iOS Settings.
-            </div>
-          )}
-        </>
+        <GameplayHUD
+          roomId={roomId}
+          calibrateController={calibrateController}
+          calibrated={calibrated}
+          gesture={gesture}
+          inCooldown={inCooldown}
+          hudRot={hudRot}
+          hudAccel={hudAccel}
+          permissionState={permissionState}
+        />
       )}
 
       {/* Footer */}
