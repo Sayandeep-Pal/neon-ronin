@@ -1,0 +1,15 @@
+{
+  "name": "neon-ronin",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "install:all": "pnpm --dir backend install && pnpm --dir game install && pnpm --dir controller install",
+    "dev:backend": "pnpm --dir backend dev",
+    "dev:game": "pnpm --dir game dev",
+    "dev:controller": "pnpm --dir controller dev",
+    "dev": "concurrently -n \"BACKEND,GAME,CONTROLLER\" -c \"magenta,cyan,yellow\" \"npm run dev:backend\" \"npm run dev:game\" \"npm run dev:controller\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
