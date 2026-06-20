@@ -6,6 +6,7 @@ import { soundManager } from './audio/SoundManager';
 import { Lobby } from './components/Lobby';
 import { GameOver } from './components/GameOver';
 import { GameHUD } from './components/GameHUD';
+import { CalibrationCheck } from './components/CalibrationCheck';
 import type { SensorData, Enemy, Particle } from './types';
 
 export default function App() {
@@ -21,7 +22,7 @@ export default function App() {
   const [isMuted, setIsMuted] = useState(false);
 
   // Gameplay states
-  const [gameState, setGameState] = useState<'lobby' | 'playing' | 'gameover'>('lobby');
+  const [gameState, setGameState] = useState<'lobby' | 'calibration' | 'playing' | 'gameover'>('lobby');
   const [score, setScore] = useState(0);
   const [highScore, setHighScore] = useState(0);
   const [combo, setCombo] = useState(0);
@@ -432,9 +433,11 @@ export default function App() {
 
     // Render loop
     const render = () => {
-      if (gameState === 'playing') {
-        // 1. Handle Wave Spawning
-        checkWaveProgression();
+      if (gameState === 'playing' || gameState === 'calibration') {
+        // 1. Handle Wave Spawning (only in playing mode)
+        if (gameState === 'playing') {
+          checkWaveProgression();
+        }
 
         // 2. Clear Screen
         ctx.fillStyle = '#030308';
@@ -869,7 +872,15 @@ export default function App() {
     swordTrailRef.current = [];
   };
 
-  const startPlaying = () => {
+  const enterCalibrationScreen = () => {
+    soundManager.initAudio();
+    setGameState('calibration');
+    enemiesRef.current = [];
+    particlesRef.current = [];
+    swordTrailRef.current = [];
+  };
+
+  const startGameplay = () => {
     soundManager.initAudio();
     setGameState('playing');
     scoreRef.current = 0;
@@ -942,7 +953,17 @@ export default function App() {
           isControllerConnected={isControllerConnected}
           qrCodeUrl={qrCodeUrl}
           hostGameSession={hostGameSession}
-          startPlaying={startPlaying}
+          startPlaying={enterCalibrationScreen}
+        />
+      )}
+
+      {/* CALIBRATION CHECK SCREEN */}
+      {gameState === 'calibration' && (
+        <CalibrationCheck
+          detectedGesture={detectedGesture}
+          blockActive={blockActiveRef.current}
+          onStartGame={startGameplay}
+          onBackToLobby={exitToLobby}
         />
       )}
 
@@ -951,7 +972,7 @@ export default function App() {
         <GameOver
           score={score}
           maxCombo={maxCombo}
-          startPlaying={startPlaying}
+          startPlaying={enterCalibrationScreen}
           exitToLobby={exitToLobby}
         />
       )}

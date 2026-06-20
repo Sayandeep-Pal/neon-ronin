@@ -74,19 +74,13 @@ export default function App() {
 
   // ── Sensor listeners ─────────────────────────────────────────────────────
   const setupSensorListeners = useCallback(() => {
-    // Orientation → rotation angles (calibration-corrected)
+    // Orientation → raw absolute orientation values
     window.addEventListener('deviceorientation', (ev) => {
-      const rawAlpha = ev.alpha ?? 0;
-      const rawBeta  = ev.beta  ?? 0;
-      const rawGamma = ev.gamma ?? 0;
-
-      // Subtract calibration snapshot, keep alpha in [0,360)
-      const corrAlpha = (rawAlpha - calibRef.current.alpha + 360) % 360;
-      const corrBeta  = rawBeta  - calibRef.current.beta;
-      const corrGamma = rawGamma - calibRef.current.gamma;
-
-      // Store raw (before smoothing — smoothing happens in tick loop)
-      rawRef.current.rotation = { alpha: corrAlpha, beta: corrBeta, gamma: corrGamma };
+      rawRef.current.rotation = {
+        alpha: ev.alpha ?? 0,
+        beta:  ev.beta  ?? 0,
+        gamma: ev.gamma ?? 0,
+      };
     });
 
     // Motion → linear acceleration + gyro
@@ -107,14 +101,7 @@ export default function App() {
   // ── Calibration ──────────────────────────────────────────────────────────
   // Snap the CURRENT raw orientation as the new zero-reference
   const calibrateController = useCallback(() => {
-    const ev = rawRef.current.rotation;
-    // We need to capture the uncorrected angles. Since rawRef already has
-    // the corrected ones (previous calib subtracted), we back-compute:
-    calibRef.current = {
-      alpha: (ev.alpha + calibRef.current.alpha) % 360,
-      beta:  ev.beta  + calibRef.current.beta,
-      gamma: ev.gamma + calibRef.current.gamma,
-    };
+    calibRef.current = { ...rawRef.current.rotation };
     // Reset smoothed rotation so the sword snaps instantly to neutral
     smoothRef.current.rotation = { alpha: 0, beta: 0, gamma: 0 };
     setCalibrated(true);
@@ -122,16 +109,16 @@ export default function App() {
   }, []);
 
   // ── Gesture classifier (called inside transmit tick) ──────────────────────
-  const classifyGesture = useCallback((s: SensorData) => {
+  const classifyGesture = useCallback((rawSensor: SensorData) => {
     const now = Date.now();
-    const { x, y, z } = s.accel;
+    const { x, y, z } = rawSensor.accel;
     const absX = Math.abs(x);
     const absY = Math.abs(y);
     const absZ = Math.abs(z);
     const totalAccel = Math.sqrt(absX * absX + absY * absY + absZ * absZ);
 
-    // ── Block detection (stance check, not a swing) ──
-    const { beta, gamma } = s.rotation;
+    // ── Block detection (absolute physical stance check relative to gravity, not calibrated) ──
+    const { beta, gamma } = rawSensor.rotation;
     const isUpright   = beta  >= BLOCK_BETA_MIN && beta  <= BLOCK_BETA_MAX;
     const isLevelRoll = Math.abs(gamma) <= BLOCK_GAMMA_MAX;
     const isStill     = totalAccel < BLOCK_MOTION_THRESHOLD;
@@ -295,14 +282,27 @@ export default function App() {
       smooth.gyro.alpha = lpf(smooth.gyro.alpha, raw.gyro.alpha);
       smooth.gyro.beta  = lpf(smooth.gyro.beta,  raw.gyro.beta);
       smooth.gyro.gamma = lpf(smooth.gyro.gamma, raw.gyro.gamma);
-      // Rotation: separate alpha wrap-around handling
-      smooth.rotation.beta  = lpf(smooth.rotation.beta,  raw.rotation.beta,  0.22);
-      smooth.rotation.gamma = lpf(smooth.rotation.gamma, raw.rotation.gamma, 0.22);
-      // For alpha (0–360 wrapping), use raw to avoid wrap-jump artefacts
-      smooth.rotation.alpha = raw.rotation.alpha;
 
-      // Classify using the RAW acceleration spike (smoothed data would suppress peaks)
-      classifyGesture({ ...raw, rotation: smooth.rotation });
+      // Calculate difference relative to calibration and normalize to [-180, 180] to prevent wrapping jump artifacts at neutral
+      let diffAlpha = raw.rotation.alpha - calibRef.current.alpha;
+      while (diffAlpha > 180) diffAlpha -= 360;
+      while (diffAlpha < -180) diffAlpha += 360;
+
+      let diffBeta = raw.rotation.beta - calibRef.current.beta;
+      while (diffBeta > 180) diffBeta -= 360;
+      while (diffBeta < -180) diffBeta += 360;
+
+      let diffGamma = raw.rotation.gamma - calibRef.current.gamma;
+      while (diffGamma > 180) diffGamma -= 360;
+      while (diffGamma < -180) diffGamma += 360;
+
+      // Apply LPF to the calibrated differences
+      smooth.rotation.alpha = lpf(smooth.rotation.alpha, diffAlpha, 0.22);
+      smooth.rotation.beta  = lpf(smooth.rotation.beta,  diffBeta,  0.22);
+      smooth.rotation.gamma = lpf(smooth.rotation.gamma, diffGamma, 0.22);
+
+      // Classify using raw sensor coordinates for blocking/slashes
+      classifyGesture(raw);
 
       // Transmit smoothed data at 30fps (every 2nd tick at 60fps)
       hudTick++;

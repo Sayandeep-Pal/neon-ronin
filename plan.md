@@ -683,4 +683,35 @@ We extracted the following modules and components from `/game/src/App.tsx`:
 
 Both applications build cleanly under TypeScript verbatim module compliance.
 
+## Sword Movement & Calibration Stability (v4)
+
+### Problem
+- **Yaw wrap-around jump**: The controller originally returned yaw (`alpha`) inside a `[0, 360)` modulo range. When the phone was held at the calibration point ($0^\circ$), shifting even slightly left wrapped the angle to $359^\circ$. This caused the game's matrix rotations to spin the 3D blade nearly $360^\circ$ and interpolate through all intermediate degrees, making it look like a spinning propeller.
+- **Unfiltered yaw jitter**: Yaw wasn't low-pass filtered, leading to twitchy rotation rendering.
+- **Calibrated block stance breakdown**: Block stance detection was checking if the calibrated `beta` (pitch) was vertical ($\approx 90^\circ$). But after calibration, the vertical holding position became $0^\circ$, breaking block detection.
+
+### Solution
+- **Yaw Normalization to $[-180, 180]$**: Raw orientation values are tracked directly, and relative difference matrices are computed inside the tick loop. Yaw is normalized to $[-180, 180]$ degrees relative to the calibration point, avoiding any wrap-around spikes at neutral coordinates.
+- **Smooth Yaw LPF**: The calibrated yaw difference is now low-pass filtered ($\alpha = 0.22$) similarly to pitch and roll, creating fluid and jitter-free sword rotations in the game.
+- **Absolute Stance Blocking**: Physical stance metrics (upright check) are evaluated using uncalibrated absolute orientation relative to gravity, ensuring blocks register reliably regardless of the user's calibrated facing direction.
+
+## In-Game Calibration Check Screen (v5)
+
+### Goal
+Before starting the high-intensity combat game loop, players need a risk-free screen to verify that their smartphone's gyroscopic stream is mirroring the 3D blade correctly and check that all slash directions and block stances trigger properly.
+
+### Implementation
+- **New state**: Added `'calibration'` state to the desktop game client.
+- **Dojo Arena Preview**: When in the calibration state, the game canvas starts the isometric render loop, showing the player's circular pedestal and the 3D-projected glowing Katana mirroring their phone rotations.
+- **Calibration Checklist Overlay**: Added an HTML HUD component [CalibrationCheck.tsx](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/game/src/components/CalibrationCheck.tsx) that shows a checklist of available techniques:
+  - Horizontal Slash (← →)
+  - Vertical Slash (↑ ↓)
+  - Diagonal Slash (↘ ↖)
+  - Forward Thrust (▶)
+  - Defense Block (⛊)
+- **Interactive Triggers**: As the player practices and performs slashes/blocks, corresponding socket gesture packets dynamically tick off and illuminate checklist items with cybernetic styling.
+- **Validation-Locked Start**: The player can exit back to the lobby or proceed to the Dojo Arena once they are satisfied with their sword calibration.
+
+
+
 
