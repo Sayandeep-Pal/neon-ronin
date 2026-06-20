@@ -11,6 +11,7 @@ interface LobbyProps {
   qrCodeUrl: string;
   hostGameSession: () => void;
   startPlaying: () => void;
+  onEnterCalibration: () => void;
 }
 
 export function Lobby({
@@ -23,7 +24,8 @@ export function Lobby({
   isControllerConnected,
   qrCodeUrl,
   hostGameSession,
-  startPlaying
+  startPlaying,
+  onEnterCalibration
 }: LobbyProps) {
   return (
     <div className="lobby-screen">
@@ -107,9 +109,14 @@ export function Lobby({
                 KATANA SYNCED & ARMED
               </span>
               
-              <button className="cyber-btn pink" style={{ marginTop: '20px', padding: '16px 50px' }} onClick={startPlaying}>
-                Enter Dojo
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', width: '100%', marginTop: '20px', padding: '0 20px', boxSizing: 'border-box' }}>
+                <button className="cyber-btn pink" style={{ width: '100%', padding: '14px 20px', fontSize: '0.85rem' }} onClick={startPlaying}>
+                  Enter Dojo Arena
+                </button>
+                <button className="cyber-btn" style={{ width: '100%', padding: '14px 20px', fontSize: '0.85rem', borderColor: 'var(--neon-blue)', color: '#fff' }} onClick={onEnterCalibration}>
+                  Practice & Calibrate
+                </button>
+              </div>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexGrow: 1, color: 'var(--text-secondary)' }}>

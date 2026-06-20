@@ -4,14 +4,12 @@ import { CheckCircle2, Circle, Swords, Sparkles } from 'lucide-react';
 interface CalibrationCheckProps {
   detectedGesture: string;
   blockActive: boolean;
-  onStartGame: () => void;
   onBackToLobby: () => void;
 }
 
 export function CalibrationCheck({
   detectedGesture,
   blockActive,
-  onStartGame,
   onBackToLobby
 }: CalibrationCheckProps) {
   const [checklist, setChecklist] = useState({
@@ -198,22 +196,18 @@ export function CalibrationCheck({
             )}
           </div>
 
-          <div style={{ display: 'flex', gap: '15px', width: '100%', marginTop: '30px' }}>
-            <button className="cyber-btn" style={{ flex: 1, padding: '14px' }} onClick={onBackToLobby}>
-              Exit Dojo Link
-            </button>
+          <div style={{ display: 'flex', width: '100%', marginTop: '30px' }}>
             <button
               className="cyber-btn pink"
               style={{
-                flex: 1.5,
+                flex: 1,
                 padding: '14px',
-                opacity: allCompleted ? 1 : 0.65,
-                boxShadow: allCompleted ? '0 0 15px var(--neon-pink)' : 'none',
+                boxShadow: '0 0 15px var(--neon-pink)',
                 transition: 'all 0.3s ease'
               }}
-              onClick={onStartGame}
+              onClick={onBackToLobby}
             >
-              Enter Dojo Arena
+              Exit Practice Range
             </button>
           </div>
         </div>

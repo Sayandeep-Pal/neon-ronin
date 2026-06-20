@@ -7,6 +7,9 @@ import { Lobby } from './components/Lobby';
 import { GameOver } from './components/GameOver';
 import { GameHUD } from './components/GameHUD';
 import { CalibrationCheck } from './components/CalibrationCheck';
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { createSamuraiCharacter, createEnemyMesh, parseColor } from './engine/samuraiModel';
 import type { SensorData, Enemy, Particle } from './types';
 
 export default function App() {
@@ -41,8 +44,8 @@ export default function App() {
     timestamp: 0
   });
 
-  // Canvas refs
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Canvas mount ref
+  const mountRef = useRef<HTMLDivElement | null>(null);
 
   // Gameplay mechanics refs
   const enemiesRef = useRef<Enemy[]>([]);
@@ -397,435 +400,392 @@ export default function App() {
     for (let i = 0; i < samuraiCount; i++) setTimeout(() => spawnEnemy('samurai'), delay += 3000);
   };
 
-  // Main Canvas Render Loop (60fps)
+  // Main Three.js Render Loop (60fps)
   useEffect(() => {
-    let animId: any = null;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (gameState === 'lobby') return; // Only setup scene when calibrating or playing
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const container = mountRef.current;
+    if (!container) return;
 
-    // Handles resizing
+    // 1. Scene & Renderer setup
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x030308);
+
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+
+    const camera = new THREE.PerspectiveCamera(45, w / h, 1, 1000);
+    camera.position.set(0, 110, 160);
+    camera.lookAt(0, 10, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(w, h);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+    // Clear and attach
+    container.innerHTML = '';
+    container.appendChild(renderer.domElement);
+
+    // 2. Lights
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.15);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.85);
+    dirLight.position.set(60, 180, 80);
+    scene.add(dirLight);
+
+    // Glowing cyberpunk spotlight
+    const spotLight = new THREE.SpotLight(0x00f0ff, 4.0, 300, Math.PI / 4, 0.5, 1);
+    spotLight.position.set(0, 150, 0);
+    scene.add(spotLight);
+
+    // 3. Floor Helpers (Grid & boundaries)
+    const gridHelper = new THREE.GridHelper(360, 36, 0x00f0ff, 0x111122);
+    gridHelper.position.y = 0;
+    (gridHelper.material as THREE.Material).transparent = true;
+    (gridHelper.material as THREE.Material).opacity = 0.15;
+    scene.add(gridHelper);
+
+    // Outer boundary ring (purple)
+    const outerRingGeo = new THREE.RingGeometry(158, 162, 64);
+    const outerRingMat = new THREE.MeshBasicMaterial({ color: 0xb026ff, side: THREE.DoubleSide, transparent: true, opacity: 0.15 });
+    const outerRing = new THREE.Mesh(outerRingGeo, outerRingMat);
+    outerRing.rotation.x = Math.PI / 2;
+    scene.add(outerRing);
+
+    // Strike Zone ring (neon blue)
+    const strikeRingGeo = new THREE.RingGeometry(68, 72, 64);
+    const strikeRingMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff, side: THREE.DoubleSide, transparent: true, opacity: 0.25 });
+    const strikeRing = new THREE.Mesh(strikeRingGeo, strikeRingMat);
+    strikeRing.rotation.x = Math.PI / 2;
+    scene.add(strikeRing);
+
+    // 4. Create Samurai Character
+    const { group: playerGroup, armPivot, bladeMat, blade, shieldBarrier } = createSamuraiCharacter();
+    scene.add(playerGroup);
+
+    // Load custom GLB Samurai Model
+    const loader = new GLTFLoader();
+    loader.load(
+      '/iron_man_-_iron_samurai.glb',
+      (gltf) => {
+        const glbModel = gltf.scene;
+
+        // Apply metallic cyberpunk styling and hide any built-in swords/weapons
+        glbModel.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            if (child.material) {
+              const materials = Array.isArray(child.material) ? child.material : [child.material];
+              materials.forEach((mat) => {
+                if (mat instanceof THREE.MeshStandardMaterial) {
+                  mat.metalness = 0.85;
+                  mat.roughness = 0.25;
+                }
+              });
+            }
+
+            // Hide pre-built swords/weapons inside the GLB model
+            const nameLower = child.name.toLowerCase();
+            if (
+              nameLower.includes('sword') || 
+              nameLower.includes('katana') || 
+              nameLower.includes('blade') || 
+              nameLower.includes('hilt') || 
+              nameLower.includes('weapon') ||
+              nameLower.includes('sheath') ||
+              nameLower.includes('scabbard')
+            ) {
+              child.visible = false;
+            }
+          }
+        });
+
+        // Auto-scale using bounding box normalization (target height = 22 units)
+        const box = new THREE.Box3().setFromObject(glbModel);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const height = size.y;
+        
+        const targetHeight = 22;
+        const scaleFactor = targetHeight / (height || 1);
+        glbModel.scale.set(scaleFactor, scaleFactor, scaleFactor);
+
+        // Center the model's pivot relative to its bounding box min/center
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+        glbModel.position.set(-center.x * scaleFactor, -box.min.y * scaleFactor, -center.z * scaleFactor);
+
+        // Hide the original simple placeholder meshes
+        playerGroup.children.forEach((child) => {
+          if ((child as any).isPlaceholder) {
+            child.visible = false;
+          }
+        });
+
+        // Add the loaded GLB model to the player group
+        playerGroup.add(glbModel);
+      },
+      (xhr) => {
+        console.log(`GLB Loading: ${Math.round((xhr.loaded / xhr.total) * 100)}%`);
+      },
+      (error) => {
+        console.error('Error loading samurai GLB model:', error);
+      }
+    );
+
+    // 5. Track 3D objects
+    const enemyMeshes = new Map<string, THREE.Object3D>();
+    const ghosts: { mesh: THREE.Mesh; opacity: number; material: THREE.MeshBasicMaterial }[] = [];
+
+    // Particle system (using BufferGeometry + Points for speed & memory safety)
+    const maxParticles = 500;
+    const particleGeometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(maxParticles * 3);
+    const colors = new Float32Array(maxParticles * 3);
+
+    particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    particleGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    const particleMaterial = new THREE.PointsMaterial({
+      size: 2.5,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.9,
+      blending: THREE.AdditiveBlending
+    });
+    const particlePoints = new THREE.Points(particleGeometry, particleMaterial);
+    scene.add(particlePoints);
+
+    // Resize handler
     const handleResize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height);
     };
     window.addEventListener('resize', handleResize);
-    handleResize();
 
-    // Isometric Projection Math
-    const ISO_ANGLE = Math.PI / 6; // 30 deg
-    const cosA = Math.cos(ISO_ANGLE);
-    const sinA = Math.sin(ISO_ANGLE);
-    
-    // Scale coordinate multiplier
-    const gridScale = 2.2; 
-
-    const project = (x: number, y: number, z: number) => {
-      const cx = canvas.width / 2;
-      const cy = canvas.height / 2 + 50; // offset center down slightly for layout balance
-      
-      const sx = cx + (x - y) * cosA * gridScale;
-      const sy = cy + (x + y) * sinA * gridScale - z * gridScale;
-      return { x: sx, y: sy };
-    };
+    let animId: number;
 
     // Render loop
     const render = () => {
       if (gameState === 'playing' || gameState === 'calibration') {
-        // 1. Handle Wave Spawning (only in playing mode)
+        // 1. Spawning
         if (gameState === 'playing') {
           checkWaveProgression();
         }
 
-        // 2. Clear Screen
-        ctx.fillStyle = '#030308';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        // Screen Shake
+        // 2. Camera shake
         if (screenShakeRef.current > 0) {
-          const dx = (Math.random() - 0.5) * screenShakeRef.current;
-          const dy = (Math.random() - 0.5) * screenShakeRef.current;
-          ctx.translate(dx, dy);
+          const shake = screenShakeRef.current;
+          const dx = (Math.random() - 0.5) * shake * 0.8;
+          const dy = (Math.random() - 0.5) * shake * 0.8;
+          const dz = (Math.random() - 0.5) * shake * 0.8;
+          camera.position.set(dx, 110 + dy, 160 + dz);
           screenShakeRef.current *= 0.9;
           if (screenShakeRef.current < 0.2) screenShakeRef.current = 0;
+        } else {
+          camera.position.set(0, 110, 160);
         }
+        camera.lookAt(0, 10, 0);
 
-        // Full Screen Flash overlay effect
+        // Flash pointlight glow
         if (flashBackgroundRef.current) {
-          ctx.fillStyle = flashBackgroundRef.current;
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          spotLight.intensity = 15.0;
           flashBackgroundRef.current = null;
+        } else {
+          spotLight.intensity = THREE.MathUtils.lerp(spotLight.intensity, 4.0, 0.1);
         }
 
-        // 3. Draw Isometric floor grid lines
-        ctx.strokeStyle = 'rgba(0, 240, 255, 0.04)';
-        ctx.lineWidth = 1;
-        const gridBound = 180;
-        const gridSpacing = 20;
-
-        for (let i = -gridBound; i <= gridBound; i += gridSpacing) {
-          // Lines along X axis
-          const p1 = project(-gridBound, i, 0);
-          const p2 = project(gridBound, i, 0);
-          ctx.beginPath();
-          ctx.moveTo(p1.x, p1.y);
-          ctx.lineTo(p2.x, p2.y);
-          ctx.stroke();
-
-          // Lines along Y axis
-          const p3 = project(i, -gridBound, 0);
-          const p4 = project(i, gridBound, 0);
-          ctx.beginPath();
-          ctx.moveTo(p3.x, p3.y);
-          ctx.lineTo(p4.x, p4.y);
-          ctx.stroke();
-        }
-
-        // Draw outer ring boundary
-        ctx.strokeStyle = 'rgba(176, 38, 255, 0.15)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        for (let a = 0; a <= Math.PI * 2 + 0.1; a += 0.1) {
-          const rx = Math.cos(a) * 160;
-          const ry = Math.sin(a) * 160;
-          const pt = project(rx, ry, 0);
-          if (a === 0) ctx.moveTo(pt.x, pt.y);
-          else ctx.lineTo(pt.x, pt.y);
-        }
-        ctx.stroke();
-
-        // 4. Draw strike zone rings around player
-        // Safe Zone (Block Guard) ring
-        ctx.strokeStyle = 'rgba(0, 240, 255, 0.12)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        for (let a = 0; a <= Math.PI * 2 + 0.1; a += 0.1) {
-          const rx = Math.cos(a) * 20;
-          const ry = Math.sin(a) * 20;
-          const pt = project(rx, ry, 0);
-          if (a === 0) ctx.moveTo(pt.x, pt.y);
-          else ctx.lineTo(pt.x, pt.y);
-        }
-        ctx.stroke();
-
-        // Target Strike Zone ring (glowing boundary)
-        ctx.strokeStyle = blockActiveRef.current ? 'rgba(176, 38, 255, 0.4)' : 'rgba(0, 240, 255, 0.3)';
-        ctx.lineWidth = 2;
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = blockActiveRef.current ? '#b026ff' : '#00f0ff';
-        ctx.beginPath();
-        for (let a = 0; a <= Math.PI * 2 + 0.1; a += 0.1) {
-          const rx = Math.cos(a) * 70;
-          const ry = Math.sin(a) * 70;
-          const pt = project(rx, ry, 0);
-          if (a === 0) ctx.moveTo(pt.x, pt.y);
-          else ctx.lineTo(pt.x, pt.y);
-        }
-        ctx.stroke();
-        ctx.shadowBlur = 0; // reset glow
-
-        // 5. Draw Player (Ronin center pedestal)
-        const pLoc = project(0, 0, 0);
-        ctx.fillStyle = 'rgba(0, 240, 255, 0.2)';
-        ctx.beginPath();
-        ctx.ellipse(pLoc.x, pLoc.y, 25 * cosA * gridScale, 25 * sinA * gridScale, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.strokeStyle = blockActiveRef.current ? '#b026ff' : '#00f0ff';
-        ctx.lineWidth = 3;
-        ctx.shadowBlur = 15;
-        ctx.shadowColor = blockActiveRef.current ? '#b026ff' : '#00f0ff';
-        ctx.beginPath();
-        ctx.ellipse(pLoc.x, pLoc.y, 16 * cosA * gridScale, 16 * sinA * gridScale, 0, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.shadowBlur = 0; // reset
-
-        // Draw shield barrier if Block active
-        if (blockActiveRef.current) {
-          ctx.strokeStyle = 'rgba(176, 38, 255, 0.6)';
-          ctx.lineWidth = 4;
-          ctx.shadowBlur = 15;
-          ctx.shadowColor = '#b026ff';
-          ctx.beginPath();
-          ctx.ellipse(pLoc.x, pLoc.y - 15, 20 * cosA * gridScale, 10 * sinA * gridScale, 0, Math.PI, Math.PI * 2);
-          ctx.stroke();
-          ctx.shadowBlur = 0;
-        }
-
-        // 6. Draw Katana (using streaming controller rotation angles)
-        const swordLen = 45;
-        // Map beta (pitch) and gamma (roll) and alpha (yaw) of phone
-        // Start coordinate offset for player's hands: (0, 0, 12)
-        const handZ = 12;
+        // 3. Position Player's Arm & Katana
         const phone = latestSensor.current.rotation;
-        
-        // Convert to radians
         const yaw = (phone.alpha * Math.PI) / 180;
         const pitch = (phone.beta * Math.PI) / 180;
         const roll = (phone.gamma * Math.PI) / 180;
+        armPivot.rotation.set(-pitch, yaw, roll, 'YXZ');
 
-        // Apply rotation matrices to default unit sword vector (0, 0, 1)
-        // Default sword extends straight up
-        let sx = 0;
-        let sy = 0;
-        let sz = swordLen;
-
-        // 1. Rotate Pitch (X-axis)
-        let y1 = sy * Math.cos(pitch) - sz * Math.sin(pitch);
-        let z1 = sy * Math.sin(pitch) + sz * Math.cos(pitch);
-        let x1 = sx;
-
-        // 2. Rotate Roll (Y-axis)
-        let x2 = x1 * Math.cos(roll) + z1 * Math.sin(roll);
-        let z2 = -x1 * Math.sin(roll) + z1 * Math.cos(roll);
-        let y2 = y1;
-
-        // 3. Rotate Yaw (Z-axis)
-        let x3 = x2 * Math.cos(yaw) - y2 * Math.sin(yaw);
-        let y3 = x2 * Math.sin(yaw) + y2 * Math.cos(yaw);
-        let z3 = z2;
-
-        // Base of blade (projected)
-        const bladeBase = project(0, 0, handZ);
-        // Tip of blade (projected)
-        const bladeTip = project(x3, y3, handZ + z3);
-
-        // Store sword tip for ribbon slash trail
-        swordTrailRef.current.push({ x: x3, y: y3, z: handZ + z3 });
-        if (swordTrailRef.current.length > 8) {
-          swordTrailRef.current.shift();
+        // Dynamic Katana light and block shield
+        if (blockActiveRef.current) {
+          bladeMat.emissive.setHex(0xb026ff);
+          shieldBarrier.visible = true;
+          (shieldBarrier.material as THREE.MeshStandardMaterial).opacity = 0.22 + Math.sin(Date.now() / 150) * 0.08;
+        } else {
+          bladeMat.emissive.setHex(0x00f0ff);
+          shieldBarrier.visible = false;
         }
 
-        // Draw Slash Ribbon Trail
-        if (swordTrailRef.current.length > 1) {
-          ctx.beginPath();
-          const startPt = project(swordTrailRef.current[0].x, swordTrailRef.current[0].y, swordTrailRef.current[0].z);
-          ctx.moveTo(startPt.x, startPt.y);
-          for (let k = 1; k < swordTrailRef.current.length; k++) {
-            const nextPt = project(swordTrailRef.current[k].x, swordTrailRef.current[k].y, swordTrailRef.current[k].z);
-            ctx.lineTo(nextPt.x, nextPt.y);
+        // Sword blade ghost trail
+        const totalRotRate = Math.abs(latestSensor.current.gyro.alpha) + Math.abs(latestSensor.current.gyro.beta) + Math.abs(latestSensor.current.gyro.gamma);
+        if (totalRotRate > 1.2) {
+          const ghostGeo = new THREE.BoxGeometry(0.2, 28, 0.8);
+          const ghostMat = new THREE.MeshBasicMaterial({
+            color: blockActiveRef.current ? 0xb026ff : 0x00f0ff,
+            transparent: true,
+            opacity: 0.35
+          });
+          const ghost = new THREE.Mesh(ghostGeo, ghostMat);
+          blade.updateMatrixWorld();
+          ghost.matrix.copy(blade.matrixWorld);
+          ghost.matrixAutoUpdate = false;
+          scene.add(ghost);
+          ghosts.push({ mesh: ghost, opacity: 0.35, material: ghostMat });
+        }
+
+        // Update trail ghosts
+        for (let i = ghosts.length - 1; i >= 0; i--) {
+          const g = ghosts[i];
+          g.opacity -= 0.06;
+          g.material.opacity = g.opacity;
+          if (g.opacity <= 0) {
+            scene.remove(g.mesh);
+            g.mesh.geometry.dispose();
+            g.material.dispose();
+            ghosts.splice(i, 1);
           }
-          ctx.strokeStyle = blockActiveRef.current ? 'rgba(176, 38, 255, 0.4)' : 'rgba(0, 240, 255, 0.4)';
-          ctx.lineWidth = 12;
-          ctx.lineCap = 'round';
-          ctx.lineJoin = 'round';
-          ctx.stroke();
         }
 
-        // Draw Katana Hilt
-        ctx.strokeStyle = '#333344';
-        ctx.lineWidth = 5;
-        const hiltBase = project(-x3 * 0.15, -y3 * 0.15, handZ - z3 * 0.15);
-        ctx.beginPath();
-        ctx.moveTo(hiltBase.x, hiltBase.y);
-        ctx.lineTo(bladeBase.x, bladeBase.y);
-        ctx.stroke();
-
-        // Draw Glowing Blade
-        ctx.strokeStyle = blockActiveRef.current ? '#b026ff' : '#00f0ff';
-        ctx.lineWidth = 4;
-        ctx.shadowBlur = 15;
-        ctx.shadowColor = blockActiveRef.current ? '#b026ff' : '#00f0ff';
-        ctx.beginPath();
-        ctx.moveTo(bladeBase.x, bladeBase.y);
-        ctx.lineTo(bladeTip.x, bladeTip.y);
-        ctx.stroke();
-
-        // White core of blade
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.5;
-        ctx.shadowBlur = 0;
-        ctx.beginPath();
-        ctx.moveTo(bladeBase.x, bladeBase.y);
-        ctx.lineTo(bladeTip.x, bladeTip.y);
-        ctx.stroke();
-
-        // 7. Update & Draw Enemies
-        for (let idx = enemiesRef.current.length - 1; idx >= 0; idx--) {
-          const enemy = enemiesRef.current[idx];
+        // 4. Draw & Update Enemies
+        const activeEnemies = enemiesRef.current;
+        activeEnemies.forEach(enemy => {
           enemy.pulseTimer += 0.05;
 
-          // Compute distance to center
           const dist = Math.sqrt(enemy.x * enemy.x + enemy.y * enemy.y);
-
-          // State Machine
           if (enemy.state === 'approach') {
-            // Check if entered strike/attack zone (dist < 22)
             if (dist < 22) {
               enemy.state = 'windup';
               enemy.windupCounter = 0;
               soundManager.playSound('alarm');
             } else {
-              // Move towards center (0,0)
               enemy.x -= Math.cos(enemy.angle) * enemy.speed;
               enemy.y -= Math.sin(enemy.angle) * enemy.speed;
             }
           } else if (enemy.state === 'windup') {
             enemy.windupCounter += 1;
-            // Check attack trigger expiration
             if (enemy.windupCounter >= enemy.windupTime) {
-              // Attack completed successfully - damage player
               if (blockActiveRef.current) {
-                // Attack blocked!
                 soundManager.playSound('hit');
                 createExplosion(enemy.x, enemy.y, enemy.z, '#b026ff', 8);
-                // Send minor block vibrate feedback to phone: 40ms
                 if (socketRef.current) socketRef.current.emit('game-event', { type: 'hit', duration: 40 });
               } else {
-                // Attacked player!
                 takeDamage(enemy.type === 'samurai' ? 30 : enemy.type === 'kamikaze' ? 20 : 15);
               }
-              // Kill enemy after attack delivery
               enemy.state = 'dead';
-              enemiesRef.current.splice(idx, 1);
-              continue;
+              const idx = activeEnemies.indexOf(enemy);
+              if (idx !== -1) activeEnemies.splice(idx, 1);
+              return;
             }
           } else if (enemy.state === 'slashed') {
-            // Slashed animation delay before disposal
             enemy.state = 'dead';
-            enemiesRef.current.splice(idx, 1);
-            continue;
+            const idx = activeEnemies.indexOf(enemy);
+            if (idx !== -1) activeEnemies.splice(idx, 1);
+            return;
           }
 
-          // Draw Enemy shape
-          const ep = project(enemy.x, enemy.y, enemy.z);
-          const isWindup = enemy.state === 'windup';
-          
-          // Outer shell color pulse
-          const pulse = Math.sin(enemy.pulseTimer) * 4;
-          const radius = enemy.size + (isWindup ? pulse + 2 : 0);
-          
-          // Draw warning projection shadow on ground
-          const shadowLoc = project(enemy.x, enemy.y, 0);
-          ctx.fillStyle = 'rgba(255, 0, 0, 0.08)';
-          ctx.beginPath();
-          ctx.ellipse(shadowLoc.x, shadowLoc.y, 8 * cosA * gridScale, 4 * sinA * gridScale, 0, 0, Math.PI * 2);
-          ctx.fill();
+          // Create if new
+          if (!enemyMeshes.has(enemy.id)) {
+            const mesh = createEnemyMesh(enemy.type, enemy.color);
+            scene.add(mesh);
+            enemyMeshes.set(enemy.id, mesh);
+          }
 
-          // Render indicators
-          ctx.strokeStyle = isWindup ? '#ff3333' : enemy.color;
-          ctx.lineWidth = isWindup ? 3 : 2;
-          ctx.shadowBlur = 10;
-          ctx.shadowColor = ctx.strokeStyle;
-
-          // Draw shape according to enemy type
-          if (enemy.type === 'drone') {
-            // Hovering Hexagon
-            ctx.beginPath();
-            for (let s = 0; s < 6; s++) {
-              const sa = (s * Math.PI) / 3;
-              const sx = ep.x + Math.cos(sa) * radius;
-              const sy = ep.y + Math.sin(sa) * radius * sinA;
-              if (s === 0) ctx.moveTo(sx, sy);
-              else ctx.lineTo(sx, sy);
+          // Update position & lookAt
+          const mesh = enemyMeshes.get(enemy.id);
+          if (mesh) {
+            mesh.position.set(enemy.x, enemy.z + 4, enemy.y);
+            mesh.rotation.y += 0.025;
+            
+            if (enemy.type === 'drone') {
+              mesh.position.y += Math.sin(enemy.pulseTimer) * 0.25;
+              const rotors = (mesh as any).rotors;
+              if (rotors) {
+                rotors[0].rotation.y += 0.25;
+                rotors[1].rotation.y += 0.25;
+              }
+            } else if (enemy.type === 'cyberninja') {
+              mesh.rotation.x += 0.05;
+              mesh.rotation.z += 0.02;
+            } else if (enemy.type === 'shieldbot') {
+              mesh.lookAt(0, 4, 0);
             }
-            ctx.closePath();
-            ctx.stroke();
-          } 
-          else if (enemy.type === 'shieldbot') {
-            // Quad Box
-            ctx.beginPath();
-            ctx.strokeRect(ep.x - radius, ep.y - radius * sinA, radius * 2, radius * 2 * sinA);
-            // Draw a heavy neon line across front
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 4;
-            ctx.beginPath();
-            ctx.moveTo(ep.x - radius, ep.y + radius * sinA);
-            ctx.lineTo(ep.x + radius, ep.y + radius * sinA);
-            ctx.stroke();
-          } 
-          else if (enemy.type === 'cyberninja') {
-            // Sleek Diamond
-            ctx.beginPath();
-            ctx.moveTo(ep.x, ep.y - radius);
-            ctx.lineTo(ep.x + radius, ep.y);
-            ctx.lineTo(ep.x, ep.y + radius);
-            ctx.lineTo(ep.x - radius, ep.y);
-            ctx.closePath();
-            ctx.stroke();
-          } 
-          else if (enemy.type === 'kamikaze') {
-            // Triangle
-            ctx.beginPath();
-            ctx.moveTo(ep.x, ep.y - radius);
-            ctx.lineTo(ep.x + radius, ep.y + radius);
-            ctx.lineTo(ep.x - radius, ep.y + radius);
-            ctx.closePath();
-            ctx.stroke();
-          } 
-          else if (enemy.type === 'samurai') {
-            // Red Crown helmet outline
-            ctx.beginPath();
-            ctx.moveTo(ep.x - radius, ep.y + radius);
-            ctx.lineTo(ep.x - radius, ep.y - radius * 0.3);
-            ctx.lineTo(ep.x - radius * 0.5, ep.y - radius);
-            ctx.lineTo(ep.x, ep.y - radius * 0.5);
-            ctx.lineTo(ep.x + radius * 0.5, ep.y - radius);
-            ctx.lineTo(ep.x + radius, ep.y - radius * 0.3);
-            ctx.lineTo(ep.x + radius, ep.y + radius);
-            ctx.closePath();
-            ctx.stroke();
-          }
 
-          // Draw health indicators for shieldbots/elites
-          if (enemy.maxHealth > 1) {
-            ctx.fillStyle = 'rgba(0,0,0,0.5)';
-            ctx.fillRect(ep.x - 12, ep.y - radius - 10, 24, 4);
-            ctx.fillStyle = '#33ff33';
-            ctx.fillRect(ep.x - 12, ep.y - radius - 10, 24 * (enemy.health / enemy.maxHealth), 4);
+            if (enemy.state === 'windup') {
+              const scale = 1.0 + Math.sin(enemy.pulseTimer * 2.5) * 0.15;
+              mesh.scale.set(scale, scale, scale);
+              mesh.traverse(child => {
+                if (child instanceof THREE.Mesh && child.material && 'emissive' in child.material) {
+                  (child.material as THREE.MeshStandardMaterial).emissive.setHex(0xff3333);
+                }
+              });
+            } else {
+              mesh.scale.set(1, 1, 1);
+            }
           }
+        });
 
-          // Draw attack progress ring (windup alarm)
-          if (isWindup) {
-            ctx.strokeStyle = 'rgba(255, 51, 51, 0.4)';
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.arc(ep.x, ep.y, radius + 8, 0, Math.PI * 2 * (1 - enemy.windupCounter / enemy.windupTime));
-            ctx.stroke();
+        // Clean disposed enemies
+        for (const [id, mesh] of enemyMeshes.entries()) {
+          const found = activeEnemies.some(e => e.id === id);
+          if (!found) {
+            scene.remove(mesh);
+            mesh.traverse(child => {
+              if (child instanceof THREE.Mesh) {
+                child.geometry.dispose();
+                if (Array.isArray(child.material)) {
+                  child.material.forEach(m => m.dispose());
+                } else {
+                  child.material.dispose();
+                }
+              }
+            });
+            enemyMeshes.delete(id);
           }
-
-          ctx.shadowBlur = 0; // reset
         }
 
-        // 8. Update & Draw Particles
-        for (let pIdx = particlesRef.current.length - 1; pIdx >= 0; pIdx--) {
-          const p = particlesRef.current[pIdx];
-          p.life += 1;
+        // 5. Update & Draw Particles
+        const activeParticles = particlesRef.current;
+        const posAttr = particleGeometry.getAttribute('position') as THREE.BufferAttribute;
+        const colorAttr = particleGeometry.getAttribute('color') as THREE.BufferAttribute;
 
-          // Apply kinetics
+        let activeCount = 0;
+        for (let pIdx = activeParticles.length - 1; pIdx >= 0; pIdx--) {
+          const p = activeParticles[pIdx];
+          p.life += 1;
           p.x += p.vx;
           p.y += p.vy;
           p.z += p.vz;
           p.vz -= 0.25; // gravity
 
-          // Floor bounce
           if (p.z <= 0) {
             p.z = 0;
-            p.vz = -p.vz * 0.6; // bounce coefficient
+            p.vz = -p.vz * 0.6;
             p.vx *= 0.8;
             p.vy *= 0.8;
           }
 
           if (p.life >= p.maxLife) {
-            particlesRef.current.splice(pIdx, 1);
+            activeParticles.splice(pIdx, 1);
             continue;
           }
 
-          // Draw particle
-          const pp = project(p.x, p.y, p.z);
-          ctx.fillStyle = p.color;
-          const pAlpha = 1 - p.life / p.maxLife;
-          ctx.globalAlpha = pAlpha;
-          ctx.beginPath();
-          ctx.arc(pp.x, pp.y, p.size, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.globalAlpha = 1.0;
+          if (activeCount < maxParticles) {
+            posAttr.setXYZ(activeCount, p.x, p.z, p.y);
+            const { r, g, b } = parseColor(p.color);
+            colorAttr.setXYZ(activeCount, r, g, b);
+            activeCount++;
+          }
         }
 
-        // Restores canvas offset translation from screen shake
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        // Push inactive off-screen
+        for (let i = activeCount; i < maxParticles; i++) {
+          posAttr.setXYZ(i, 9999, 9999, 9999);
+        }
+
+        posAttr.needsUpdate = true;
+        colorAttr.needsUpdate = true;
+
+        // Render Frame
+        renderer.render(scene, camera);
       }
 
       animId = requestAnimationFrame(render);
@@ -836,6 +796,21 @@ export default function App() {
     return () => {
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', handleResize);
+      container.innerHTML = '';
+      
+      // Deep dispose scene
+      scene.traverse(obj => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose();
+          if (Array.isArray(obj.material)) {
+            obj.material.forEach(m => m.dispose());
+          } else {
+            obj.material.dispose();
+          }
+        }
+      });
+      particleGeometry.dispose();
+      particleMaterial.dispose();
     };
   }, [gameState]);
 
@@ -953,7 +928,8 @@ export default function App() {
           isControllerConnected={isControllerConnected}
           qrCodeUrl={qrCodeUrl}
           hostGameSession={hostGameSession}
-          startPlaying={enterCalibrationScreen}
+          startPlaying={startGameplay}
+          onEnterCalibration={enterCalibrationScreen}
         />
       )}
 
@@ -962,7 +938,6 @@ export default function App() {
         <CalibrationCheck
           detectedGesture={detectedGesture}
           blockActive={blockActiveRef.current}
-          onStartGame={startGameplay}
           onBackToLobby={exitToLobby}
         />
       )}
@@ -972,7 +947,7 @@ export default function App() {
         <GameOver
           score={score}
           maxCombo={maxCombo}
-          startPlaying={enterCalibrationScreen}
+          startPlaying={startGameplay}
           exitToLobby={exitToLobby}
         />
       )}
@@ -991,7 +966,7 @@ export default function App() {
       )}
 
       {/* Main Game Screen Canvas */}
-      <canvas ref={canvasRef} className="game-canvas" />
+      <div ref={mountRef} className="game-canvas" />
     </div>
   );
 }

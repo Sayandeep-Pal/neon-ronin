@@ -712,6 +712,53 @@ Before starting the high-intensity combat game loop, players need a risk-free sc
 - **Interactive Triggers**: As the player practices and performs slashes/blocks, corresponding socket gesture packets dynamically tick off and illuminate checklist items with cybernetic styling.
 - **Validation-Locked Start**: The player can exit back to the lobby or proceed to the Dojo Arena once they are satisfied with their sword calibration.
 
+## Three.js 3D Cyber-Samurai Integration (v6)
+
+### Goal
+Replace the 2D projected line canvas engine with a true hardware-accelerated 3D WebGL renderer. Make the player's character appear as an armored cyberpunk Samurai holding the glowing Katana, and translate 2D coordinate projections into a fully spatial 3D arena.
+
+### Implementation
+- **WebGL Renderer**: Installed `three` and integrated a `THREE.WebGLRenderer` rendering to a container `div` mount, with dynamic aspect-ratio resizing.
+- **Cyber-Samurai Mesh Factory**: Built a low-poly character model inside [samuraiModel.ts](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/game/src/engine/samuraiModel.ts) using Three.js group geometries:
+  - Dark metal plates with neon pink accent breastplates.
+  - Head spheres with glowing neon blue visors and gold crest horns (Kuwagata helm).
+  - An arm pivot joint holding the Katana that rotates in 3D using phone orientation.
+  - A glowing 3D Katana blade with emissive neon materials that change color dynamically (blue for attack, purple for active blocks).
+- **Holographic After-Image Trail**: Swapped the 2D ribbon trail for spatial blade ghost meshes that duplicate the Katana's world matrix dynamically and fade away using opacity intervals.
+- **Armored 3D Swarms**: Refactored enemies into solid 3D shapes:
+  - Drones: Hovering hexagonal hulls with spinning rotor meshes.
+  - Shieldbots: Armored cubes with glowing purple front-shields.
+  - Cyber Ninjas: Orbiting pink octahedrons.
+  - Kamikazes: Aggressive pointed cones.
+  - Mini Boss Samurai: Giant scarlet armored cylinder with dual gold helm crests.
+- **GPU Point Particle System**: Programmed a high-performance particle engine using a single `THREE.Points` draw call with memory-safe `THREE.BufferGeometry` attributes (reused across all enemy explosion bursts).
+
+## Standalone Practice Range / Decoupled Calibration (v7)
+
+### Goal
+Decouple the calibration verification process from the main game startup sequence. Create a dedicated calibration practice range accessible directly from the Lobby, allowing users to sync and test their movement gestures without initiating the wave system.
+
+### Implementation
+- **Lobby Redesign**: The Lobby [Lobby.tsx](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/game/src/components/Lobby.tsx) now renders two separate actions when paired:
+  - **Enter Dojo Arena**: Directly starts the game (`gameState = 'playing'`).
+  - **Practice & Calibrate**: Opens the standalone practice range (`gameState = 'calibration'`).
+- **Independent Practice Range**: The Calibration Check screen [CalibrationCheck.tsx](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/game/src/components/CalibrationCheck.tsx) has been updated to remove the "Enter Arena" action. It now acts as a dedicated sandbox where players can test moves and calibrate indefinitely, exiting back to the Lobby when finished.
+
+## Custom 3D GLB Samurai Model Integration (v8)
+
+### Goal
+Replace the abstract low-poly geometric placeholder player mesh with a high-fidelity custom GLB 3D model (`iron_man_-_iron_samurai.glb`) without affecting the dynamic 3D Katana blade, hilt, forearm, and pulsing shield functionality or introducing blocking asset load times.
+
+### Implementation
+- **Vite Asset Serving**: Placed the 29MB `iron_man_-_iron_samurai.glb` model in the `game/public/` folder, enabling the browser-side code to download it asynchronously via `/iron_man_-_iron_samurai.glb`.
+- **GLTFLoader Integration**: Integrated the loader in [App.tsx](file:///home/sayandeep/my-projects/personal-project/neon%20ronin/game/src/App.tsx) inside the main rendering `useEffect` setup.
+- **Cyberpunk Material Enhancements**: Traversed the loaded GLB mesh hierarchy to override standard values, setting `metalness = 0.85` and `roughness = 0.25` for a shiny, reflective cyberpunk aesthetic.
+- **Weapon-Mesh De-duplication**: Hid model-internal static sword/weapon meshes by scanning child names for keywords (`sword`, `katana`, `blade`, `hilt`, `weapon`, `sheath`, `scabbard`), preventing conflict and overlaps with our dynamic orientation-responsive katana hilt/blade.
+- **Bounding Box Normalization**: Standardized the scale factor based on the computed bounding box height, setting the target height to 22 units (the exact height of the placeholder character) and centering the model's pivot at `y = 0` on the arena pedestal.
+- **Smooth Placeholder Swap**: Kept the lightweight geometry placeholder meshes visible initially to avoid black screens during load time, swapping them to invisible once the GLB loaded successfully.
+
+
+
 
 
 
